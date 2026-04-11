@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+.DS_Store
+.datasets/
+# Ignore the datasets folder
+datasets/
+*.tar.gz

@@ -1,0 +1,114 @@
+import argparse
+import os
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import torch
+from torch.utils.data import DataLoader, Dataset
+from PIL import Image
+from torchvision import transforms
+from tqdm import tqdm
+
+# Import YOUR model 
+from models.StudentModel import StudentModel
+
+class ImageDataset(Dataset):
+    def __init__(self, root, image_paths, image_size=(224, 224)):
+        self.root = root
+        self.image_paths = image_paths
+        self.transform = transforms.Compose([
+            transforms.Resize(image_size),
+            transforms.CenterCrop(image_size),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ])
+
+    def __len__(self):
+        return len(self.image_paths)
+
+    def __getitem__(self, idx):
+        path = os.path.join(self.root, self.image_paths[idx])
+        image = Image.open(path).convert("RGB")
+        return self.transform(image), idx
+
+def encode_images(model, dataset, batch_size=64, num_workers=4):
+    """Encode all images and return embeddings in order."""
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False,
+                        num_workers=num_workers, pin_memory=True)
+    emb_list, idx_list = [], []
+    for images, indices in tqdm(loader, desc="Encoding"):
+        # This calls your StudentModel.encode()
+        emb_list.append(model.encode(images).cpu().numpy())
+        idx_list.append(indices.numpy())
+    embeddings = np.vstack(emb_list)
+    indices = np.concatenate(idx_list)
+    return embeddings[np.argsort(indices)]
+
+def load_dataset_a(root):
+    df = pd.read_parquet(os.path.join(root, "test.parquet"))
+    query_paths, gallery_paths = [], []
+    for pid, group in df.groupby("identity"):
+        paths = group["image_path"].values.tolist()
+        if len(paths) >= 2:
+            query_paths.extend(paths[:2])
+            gallery_paths.extend(paths[2:])
+        else:
+            gallery_paths.extend(paths)
+    gallery_paths.extend(query_paths) 
+    return query_paths, gallery_paths
+
+def load_dataset_b(root):
+    df = pd.read_parquet(os.path.join(root, "test.parquet"))
+    query_df = df[df["split"] == "query"]
+    gallery_df = df[df["split"] == "gallery"]
+    return query_df["image_path"].tolist(), gallery_df["image_path"].tolist()
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dataset_root", type=str, required=True)
+    parser.add_argument("--dataset_name", type=str, required=True, choices=["dataset_a", "dataset_b"])
+    parser.add_argument("--output", type=str, required=True)
+    parser.add_argument("--batch_size", type=int, default=64)
+    parser.add_argument("--device", type=str, default="cuda")
+    parser.add_argument("--num_workers", type=int, default=4)
+    parser.add_argument("--top_k", type=int, default=50)
+    args = parser.parse_args()
+
+    # Automatically swap to CPU for Mac users
+    if not torch.cuda.is_available() and not torch.backends.mps.is_available():
+        args.device = "cpu"
+    elif torch.backends.mps.is_available():
+        args.device = "mps" # Uses Apple Silicon GPU if available
+
+    if args.dataset_name == "dataset_a":
+        query_paths, gallery_paths = load_dataset_a(args.dataset_root)
+    else:
+        query_paths, gallery_paths = load_dataset_b(args.dataset_root)
+
+    print(f"Queries: {len(query_paths)}, Gallery: {len(gallery_paths)}")
+
+    # Initialize your StudentModel
+    model = StudentModel(args.device)
+
+    query_dataset = ImageDataset(args.dataset_root, query_paths)
+    gallery_dataset = ImageDataset(args.dataset_root, gallery_paths)
+
+    query_emb = encode_images(model, query_dataset, args.batch_size, args.num_workers)
+    gallery_emb = encode_images(model, gallery_dataset, args.batch_size, args.num_workers)
+
+    print("Computing rankings...")
+    similarity = np.matmul(query_emb, gallery_emb.T)
+    rankings = np.argsort(-similarity, axis=1)[:, :args.top_k]
+
+    Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+    rows = []
+    for q_idx in range(len(query_paths)):
+        ranked_str = ",".join(str(x) for x in rankings[q_idx])
+        rows.append({"query_index": q_idx, "ranked_gallery_indices": ranked_str})
+
+    pd.DataFrame(rows).to_csv(args.output, index=False)
+    print(f"Predictions saved to: {args.output}")
+
+if __name__ == "__main__":
+    main()
