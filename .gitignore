@@ -5,3 +5,11 @@ __pycache__/
 # Ignore the datasets folder
 datasets/
 *.tar.gz
+*.parquet
+
+check_data.py
+train_example.py
+view_images.py
+
+checkpoints/
+*.pth

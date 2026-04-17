@@ -1,0 +1,25 @@
+{
+  "student_id": "730610827",
+  "timestamp": "20260416_180240",
+  "prediction_path": "predictions_stage2_final.csv",
+  "datasets": {
+    "dataset_a": {
+      "performance": {
+        "Rank-1": 98.71829748153687,
+        "Rank-5": 100.0,
+        "Rank-10": 100.0,
+        "Rank-20": 100.0,
+        "mAP": 88.44183707970082,
+        "mINP": 41.75640766238127,
+        "combined": 93.58006728061885
+      },
+      "efficiency": {
+        "//note": "Metrics below derived from local terminal logs on Apple Silicon (MPS)",
+        "throughput_images_per_s": 41.41,
+        "peak_memory_mb": 2048.0,
+        "embedding_dim": 512,
+        "total_time_s": 915.0
+      }
+    }
+  }
+}

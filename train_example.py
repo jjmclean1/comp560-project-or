@@ -41,13 +41,13 @@ from tqdm import tqdm
 class ReIDTrainDataset(Dataset):
     """Training dataset for ReID loaded from Parquet metadata."""
 
-    def __init__(self, root: str, parquet_file: str = "train.parquet", image_size=(224, 224)):
+    def __init__(self, root: str, parquet_file: str = "datasets/dataset_a/or_dataset_a_train.parquet", image_size=(224, 224)):
         self.root = root
         df = pd.read_parquet(os.path.join(root, parquet_file))
 
         # Filter to train split only (for datasets with mixed parquet)
-        if "split" in df.columns:
-            df = df[df["split"] == "train"]
+        #if "split" in df.columns:
+        #    df = df[df["split"] == "train"]
 
         unique_ids = sorted(df["identity"].unique())
         self.id_to_label = {pid: i for i, pid in enumerate(unique_ids)}

@@ -102,3 +102,40 @@ project-or/
 ├── train_example.py         # Training example
 └── results/                 # Output directory
 ```
+
+
+# Object Re-Identification Using Vision-Language Models (CLIPReID)
+**Course:** COMP 560: Artificial Intelligence  
+**Authors:** Jon Mclean, Niyati Goswami, Falisha Khokhar, Victor Melo, Anna Hope Lynch  
+**Date:** April 2026
+
+---
+
+## Project Overview
+This project implements a two-stage **CLIPReID** framework to adapt the OpenAI CLIP (ViT-B/16) foundation model for the task of object re-identification on Dataset A. Our approach utilizes a custom **Token-Initialized ArcFace** methodology to refine visual embeddings while maintaining the semantic structure of the CLIP latent space.
+
+### Final Performance (Dataset A)
+- **Rank-1:** 98.71%
+- **mAP:** 88.44%
+- **Combined Score:** 93.58%
+
+---
+
+## Installation & Setup
+
+### 1. Requirements
+This project was developed and tested on **macOS (Apple Silicon)** using the `mps` (Metal Performance Shaders) backend.
+
+- Python 3.9+
+- PyTorch (MPS compatible)
+- Transformers (HuggingFace)
+- Pandas, NumPy, Scikit-learn, PIL
+
+### 2. Environment Setup
+```bash
+# Create and activate a virtual environment
+python -m venv .venv
+source .venv/bin/activate
+
+# Install dependencies
+pip install torch torchvision transformers pandas numpy scikit-learn tqdm pyarrow

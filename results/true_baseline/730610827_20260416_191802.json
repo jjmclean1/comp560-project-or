@@ -1,0 +1,24 @@
+{
+  "student_id": "730610827",
+  "timestamp": "20260416_191802",
+  "prediction_path": "predictions_true_baseline.csv",
+  "datasets": {
+    "dataset_a": {
+      "performance": {
+        "Rank-1": 99.9181866645813,
+        "Rank-5": 100.0,
+        "Rank-10": 100.0,
+        "Rank-20": 100.0,
+        "mAP": 85.57710457137253,
+        "mINP": 51.88301726608324,
+        "combined": 92.74764561797691
+      },
+      "submission_info": {
+        "num_queries": 7334,
+        "num_gallery": 30561,
+        "num_predicted_queries": 7334,
+        "num_missing_queries": 0
+      }
+    }
+  }
+}

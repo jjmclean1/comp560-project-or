@@ -11,7 +11,7 @@ from torchvision import transforms
 from tqdm import tqdm
 
 # Import YOUR model 
-from models.StudentModel import StudentModel
+from models.student_model import StudentModel
 
 class ImageDataset(Dataset):
     def __init__(self, root, image_paths, image_size=(224, 224)):

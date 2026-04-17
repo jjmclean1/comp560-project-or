@@ -7,6 +7,7 @@ import argparse
 import os
 import math
 from pathlib import Path
+import tinker
 
 import numpy as np
 import pandas as pd
@@ -22,13 +23,16 @@ from transformers import CLIPVisionModelWithProjection
 # ============================================================================
 # Dataset (Kept exactly as provided by the professor)
 # ============================================================================
+# ============================================================================
+# Dataset (Updated with Deep Search for 109k Images)
+# ============================================================================
 class ReIDTrainDataset(Dataset):
     """Training dataset for ReID loaded from Parquet metadata."""
 
     def __init__(self, root: str, parquet_file: str = "or_dataset_a_train.parquet", image_size=(224, 224)):
         self.root = root
         
-        # 1. Try to find the parquet file (checks root, then checks one level up)
+        # 1. Try to find the parquet file
         parquet_path = os.path.join(root, parquet_file)
         if not os.path.exists(parquet_path):
             parquet_path = os.path.join(root, "..", parquet_file)
@@ -41,29 +45,36 @@ class ReIDTrainDataset(Dataset):
         print("Scanning for missing images...")
         df["image_path"] = df["image_path"].str.strip()
         
-        # This function finds the file whether your folder is named 'images' or 'train_images'
+        # 2. build map
+        print("Building local image map (indexing 110k images)...")
+        self.local_file_map = {}
+        train_images_dir = os.path.join(self.root, "train_images")
+        for root_dir, _, files in os.walk(train_images_dir):
+            for f in files:
+                if f.endswith(('.jpg', '.jpeg', '.png')):
+                    #relative path from self.root
+                    self.local_file_map[f] = os.path.relpath(os.path.join(root_dir, f), self.root)
+
+        # 3. path finder using the map
         def get_real_path(p):
-            # Try original (images/...)
-            path1 = os.path.join(self.root, p)
-            if os.path.exists(path1): return p
+            if pd.isna(p): return None
+            filename = os.path.basename(p.strip())
+            if filename in self.local_file_map:
+                return self.local_file_map[filename]
             
-            # Try renamed (train_images/...)
-            path2 = os.path.join(self.root, p.replace("images/", "train_images/"))
-            if os.path.exists(path2): return p.replace("images/", "train_images/")
-            
-            # Try direct (stripping the images/ prefix if root is already inside train_images)
-            path3 = os.path.join(self.root, p.split("/", 1)[-1])
-            if os.path.exists(path3): return p.split("/", 1)[-1]
-            
+            #fallback, raw path
+            if os.path.exists(os.path.join(self.root, p.strip())):
+                return p.strip()
+                
             return None
 
-        # Apply the path finder
+        # 4. apply the path finder, filter out dead links
+        print("Mapping metadata to local files...")
         df["final_path"] = df["image_path"].apply(get_real_path)
         df = df[df["final_path"].notna()]
         
-        print(f"DEBUG: Kept {len(df)} valid images.")
+        print(f"DEBUG: Using FULL dataset with {len(df)} valid images.")
         
-        # Essential: These must be defined even if count is 0 to avoid AttributeErrors
         self.image_paths = df["final_path"].tolist()
         unique_ids = sorted(df["identity"].unique())
         self.id_to_label = {pid: i for i, pid in enumerate(unique_ids)}
@@ -83,31 +94,24 @@ class ReIDTrainDataset(Dataset):
         return len(self.image_paths)
 
     def __getitem__(self, idx):
-        # Uses the final_path we found during the scan
         path = os.path.join(self.root, self.image_paths[idx])
         image = Image.open(path).convert("RGB")
         image = self.transform(image)
         return image, self.labels[idx]
 
-
-
-# ============================================================================
-# Model: CLIPReID Stage 1
-# ============================================================================
 class CLIPReID_Stage1(nn.Module):
     def __init__(self, num_classes, embedding_dim=512):
         super().__init__()
-        # Load the off-the-shelf CLIP Vision Encoder
+        #Load the off-the-shelf CLIP Vision Encoder
         self.backbone = CLIPVisionModelWithProjection.from_pretrained("openai/clip-vit-base-patch16")
         
-        # STAGE 1 MAGIC: Freeze the entire image encoder
+        #STAGE 1: Freezing the entire image encoder
         for param in self.backbone.parameters():
             param.requires_grad = False
             
-        # Create a learnable token for each identity
+        #creating learnable token for each
         self.identity_tokens = nn.Embedding(num_classes, embedding_dim)
         
-        # Learnable temperature scaling (standard in CLIP)
         self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
         self._embedding_dim = embedding_dim
 
@@ -116,11 +120,11 @@ class CLIPReID_Stage1(nn.Module):
         return self._embedding_dim
 
     def forward(self, images, labels=None):
-        # 1. Get image embeddings from the frozen backbone
+        # get image embeddings from the frozen backbone
         image_embeds = self.backbone(images).image_embeds
         image_embeds = F.normalize(image_embeds, p=2, dim=-1)
 
-        # If training, calculate similarity against all identity tokens
+        # calculate similarity against all identity tokens
         if self.training and labels is not None:
             text_embeds = self.identity_tokens.weight
             text_embeds = F.normalize(text_embeds, p=2, dim=-1)
@@ -132,42 +136,46 @@ class CLIPReID_Stage1(nn.Module):
         return image_embeds
 
     def encode(self, images):
-        # Used during evaluation/prediction to just get the image vector
         self.eval()
         return self.forward(images)
 
-# ============================================================================
-# Training Loop
-# ============================================================================
+
 def train(args):
-    # Auto-detect Mac Apple Silicon (MPS), CUDA, or CPU
     if torch.cuda.is_available():
         device = torch.device("cuda")
     elif torch.backends.mps.is_available():
-        device = torch.device("mps")
+        device = torch.device("mps") # Apple Silicon
     else:
         device = torch.device("cpu")
+        
+    print(f"Using device: {device}")
 
+    # Dataset & DataLoader setup
     dataset = ReIDTrainDataset(args.data_root, image_size=(args.image_size, args.image_size))
+    
     dataloader = DataLoader(
-        dataset, batch_size=args.batch_size, shuffle=True,
-        num_workers=args.num_workers, drop_last=True,
+        dataset, 
+        batch_size=args.batch_size, 
+        shuffle=True,
+        num_workers=args.num_workers, 
+        drop_last=True,
+        pin_memory=True if torch.cuda.is_available() else False
     )
 
     print(f"Training set: {len(dataset)} images, {dataset.num_classes} identities")
 
+    # Model
     model = CLIPReID_Stage1(num_classes=dataset.num_classes, embedding_dim=args.embedding_dim).to(device)
 
-    # For Stage 1, we use basic CrossEntropyLoss (matching images to their token)
+    # Stage 1 Loss
     criterion = nn.CrossEntropyLoss()
 
-    # OPTIMIZER: ONLY train the identity tokens and the logit scale. The backbone is frozen!
+    # only training the identity tokens and scale; backbone is frozen
     optimizer = torch.optim.AdamW([
         {"params": model.identity_tokens.parameters(), "lr": args.lr},
         {"params": [model.logit_scale], "lr": args.lr}
     ], weight_decay=args.weight_decay)
 
-    # LR Scheduler: cosine annealing with warmup
     total_steps = len(dataloader) * args.epochs
     warmup_steps = len(dataloader) * args.warmup_epochs
 
@@ -183,6 +191,7 @@ def train(args):
     save_dir.mkdir(parents=True, exist_ok=True)
     best_loss = float('inf')
 
+    # core loop
     for epoch in range(args.epochs):
         model.train()
         epoch_loss = 0.0
@@ -207,24 +216,34 @@ def train(args):
         avg_loss = epoch_loss / len(dataloader)
         print(f"Epoch {epoch+1}: avg_loss={avg_loss:.4f}")
 
+        # save checkpoints
         if avg_loss < best_loss:
             best_loss = avg_loss
+            checkpoint_path = save_dir / "stage1_full_100k.pth" 
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'loss': avg_loss,
                 'embedding_dim': args.embedding_dim,
-                'num_classes': dataset.num_classes # Save this so we can load it later!
-            }, save_dir / "best_model.pth")
-            print(f"  Saved best model (loss={avg_loss:.4f})")
+                'num_classes': dataset.num_classes
+            }, checkpoint_path)
+            print(f"  Saved full dataset model to {checkpoint_path}")
 
-# ============================================================================
-# Prediction Generation (Unchanged)
-# ============================================================================
+
 class ImageDataset(Dataset):
     def __init__(self, root, image_paths, image_size=(224, 224)):
         self.root = root
+        #map of every file in train_images
+        print("Building local image map (this takes 10 seconds)...")
+        self.local_file_map = {}
+        train_images_dir = os.path.join(self.root, "train_images")
+        for root_dir, _, files in os.walk(train_images_dir):
+            for f in files:
+                if f.endswith(('.jpg', '.jpeg', '.png')):
+                    #store the relative path
+                    self.local_file_map[f] = os.path.relpath(os.path.join(root_dir, f), self.root)
+
         self.image_paths = image_paths
         self.transform = transforms.Compose([
             transforms.Resize(image_size),
